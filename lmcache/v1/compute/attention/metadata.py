@@ -27,6 +27,10 @@ class LMCFlashAttnMetadata(LMCAttnMetadata):
     cu_seqlens_k: torch.Tensor
     max_query_len: torch.Tensor
     max_seq_len: torch.Tensor
+    # Positions of the recomputed rows inside the key sequence, set once blending
+    # has picked them. When set, the backend masks each row at its own position
+    # instead of aligning a causal mask to the bottom-right corner.
+    q_positions: Optional[torch.Tensor] = None
 
     def update_from_top_indices(self, top_indices: torch.Tensor):
         top_k_num = len(top_indices)
@@ -34,6 +38,7 @@ class LMCFlashAttnMetadata(LMCAttnMetadata):
         device = self.query_start_loc.device
         dtype = self.query_start_loc.dtype
         self.query_start_loc = torch.tensor([0, top_k_num], dtype=dtype, device=device)
+        self.q_positions = top_indices.to(torch.int32)
 
 
 @dataclass

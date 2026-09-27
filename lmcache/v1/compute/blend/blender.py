@@ -33,8 +33,14 @@ class LMCBlender:
         self.gpu_connector = gpu_connector
 
         enable_sparse = False
+        # Recomputed tokens attend with a position-correct causal mask by default.
+        # `blend_legacy_causal_mask: true` restores the old bottom-right mask.
+        self.legacy_causal_mask = False
         if config.extra_config is not None:
             enable_sparse = config.extra_config.get("enable_sparse", False)
+            self.legacy_causal_mask = bool(
+                config.extra_config.get("blend_legacy_causal_mask", False)
+            )
 
         self.layerwise_model = infer_model_from_vllm(vllm_model, self, enable_sparse)
 
@@ -112,6 +118,8 @@ class LMCBlender:
             attn_output = attn_output[:topk_num]
 
             attn_metadata.update_from_top_indices(top_indices)
+            if self.legacy_causal_mask and hasattr(attn_metadata, "q_positions"):
+                attn_metadata.q_positions = None
 
         if self.metadata.imp_indices is not None:
             old_k[self.metadata.imp_indices] = k

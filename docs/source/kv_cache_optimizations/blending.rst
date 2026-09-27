@@ -39,6 +39,16 @@ Below are some blending-related configurations (and explanations):
         os.environ["VLLM_ATTENTION_BACKEND"] = "FLASHINFER"
         os.environ["LMCACHE_EXTRA_CONFIG"] = '{"enable_sparse": true}'
 
+.. note::
+
+    With the default FlashAttention backend, the recomputed tokens now attend with a
+    position-correct causal mask: a token at position ``p`` sees keys ``0..p`` only.
+    Earlier versions called a causal kernel with ``len(q) < len(k)``, which aligns the
+    mask to the bottom-right corner and lets gathered tokens see later ones
+    (`#1152 <https://github.com/LMCache/LMCache/issues/1152>`_). The exact mask runs on
+    FlashAttention-4's ``mask_mod`` when vLLM ships it (sm90+) and on PyTorch SDPA otherwise.
+    Set ``LMCACHE_EXTRA_CONFIG='{"blend_legacy_causal_mask": true}'`` to restore the old mask.
+
 Firstly, we preprocess texts into tokens, as tokenizing a concatenated string may produce different tokens than concatenating the results of tokenizing each string individually.
 For example, assume we have a system prompt and three text chunks. We need to preprocess them into tokens before sending to the LLM:
 

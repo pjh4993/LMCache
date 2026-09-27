@@ -15,9 +15,13 @@ import torch
 
 # First Party
 from lmcache import torch_dev, torch_device_type
+from lmcache.logging import init_logger
 from lmcache.v1.compute.attention.abstract import AttentionInterface
 from lmcache.v1.compute.attention.metadata import LMCFlashAttnMetadata
+from lmcache.v1.compute.attention.position_mask import position_masked_attention
 from lmcache.v1.compute.attention.utils import infer_attn_func_from_vllm
+
+logger = init_logger(__name__)
 
 if TYPE_CHECKING:
     # First Party
@@ -57,6 +61,23 @@ class LMCFlashAttnBackend(AttentionInterface):
         **kwargs,
     ) -> torch.Tensor:
         assert isinstance(attn_metadata, LMCFlashAttnMetadata)
+
+        if (
+            attn_metadata.q_positions is not None
+            and key.dtype not in (torch.float8_e4m3fn, torch.float8_e5m2)
+            and self._position_mask_supported()
+        ):
+            # Blending has gathered a subset of rows; mask each at its own position.
+            # A causal kernel with len(q) < len(k) would align to the bottom-right
+            # and let the gathered rows see later tokens.
+            return position_masked_attention(
+                query,
+                key,
+                value,
+                attn_metadata.q_positions,
+                self.vllm_attn_impl.scale,
+                out=output,
+            )
 
         cu_seqlens_q = attn_metadata.query_start_loc
         seqused_k = attn_metadata.seq_lens
@@ -101,6 +122,24 @@ class LMCFlashAttnBackend(AttentionInterface):
         )
 
         return output
+
+    def _position_mask_supported(self) -> bool:
+        """The position-masked path implements plain softmax attention only."""
+        impl = self.vllm_attn_impl
+        window = getattr(impl, "sliding_window", None)
+        unsupported = (
+            getattr(impl, "alibi_slopes", None) is not None
+            or (window is not None and tuple(window) not in ((-1, -1), (None, None)))
+            or bool(getattr(impl, "logits_soft_cap", 0) or 0)
+        )
+        if unsupported and not getattr(self, "_warned_position_mask", False):
+            logger.warning(
+                "CacheBlend position-correct masking does not handle ALiBi, sliding "
+                "windows or soft-capping; falling back to the bottom-right causal "
+                "mask for this layer"
+            )
+            self._warned_position_mask = True
+        return not unsupported
 
     def _schedule(
         self, batch_size, cu_query_lens, max_query_len, seqlens, max_seq_len, causal
